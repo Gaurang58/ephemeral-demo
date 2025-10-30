@@ -4,19 +4,17 @@ on:
     types: [opened, synchronize, reopened]
 
 env:
-  # >>> CHANGE if you used different names when creating resources
   AZURE_RESOURCE_GROUP: aca-demo-rg
   AZURE_ENVIRONMENT: aca-demo-env
   LOCATION: uksouth
-  # ACR name you created earlier (already stored as a secret in your repo)
   ACR_NAME: ${{ secrets.ACR_NAME }}
 
 jobs:
   preview:
     permissions:
-      id-token: write       # required for OIDC login to Azure
+      id-token: write
       contents: read
-      pull-requests: write  # to post the Preview URL comment
+      pull-requests: write
     runs-on: ubuntu-latest
 
     steps:
@@ -40,34 +38,6 @@ jobs:
           echo "BACKEND=backend-pr-${{ github.event.number }}" >> $GITHUB_OUTPUT
           echo "FRONTEND=frontend-pr-${{ github.event.number }}" >> $GITHUB_OUTPUT
 
-      # --- Resolve ACR registry URL, username, and password ---
-      # If ACR_LOGIN_SERVER / ACR_USERNAME / ACR_PASSWORD secrets are present, use them.
-      # Otherwise, auto-fetch from Azure (requires ACR admin user enabled).
-      - name: Resolve ACR credentials
-        id: acrcreds
-        shell: bash
-        run: |
-          # REGISTRY URL
-          if [ -n "${{ secrets.ACR_LOGIN_SERVER }}" ]; then
-            echo "REGISTRY_URL=${{ secrets.ACR_LOGIN_SERVER }}" >> $GITHUB_ENV
-          else
-            ACR_LOGIN=$(az acr show -n "${{ env.ACR_NAME }}" --query loginServer -o tsv)
-            echo "REGISTRY_URL=$ACR_LOGIN" >> $GITHUB_ENV
-          fi
-
-          # USERNAME + PASSWORD
-          if [ -n "${{ secrets.ACR_USERNAME }}" ] && [ -n "${{ secrets.ACR_PASSWORD }}" ]; then
-            echo "REGISTRY_USERNAME=${{ secrets.ACR_USERNAME }}" >> $GITHUB_ENV
-            echo "REGISTRY_PASSWORD=${{ secrets.ACR_PASSWORD }}" >> $GITHUB_ENV
-          else
-            # Fetch from ACR (works if admin user is enabled)
-            CREDS_JSON=$(az acr credential show -n "${{ env.ACR_NAME }}")
-            U=$(echo "$CREDS_JSON" | jq -r '.username')
-            P=$(echo "$CREDS_JSON" | jq -r '.passwords[0].value')
-            echo "REGISTRY_USERNAME=$U" >> $GITHUB_ENV
-            echo "REGISTRY_PASSWORD=$P" >> $GITHUB_ENV
-          fi
-
       # --- Deploy BACKEND first (public ingress) ---
       - name: Build & deploy backend
         uses: azure/container-apps-deploy-action@v1
@@ -79,10 +49,6 @@ jobs:
           appSourcePath:              ./backend
           targetPort:                 4000
           ingress:                    external
-          # Private registry credentials for the running app to pull the image
-          registryUrl:                ${{ env.REGISTRY_URL }}
-          registryUsername:           ${{ env.REGISTRY_USERNAME }}
-          registryPassword:           ${{ env.REGISTRY_PASSWORD }}
 
       - name: Get backend FQDN
         id: get_backend
@@ -103,16 +69,12 @@ jobs:
           ingress:                    external
           environmentVariables: |
             API_URL=https://${{ steps.get_backend.outputs.FQDN }}
-          registryUrl:                ${{ env.REGISTRY_URL }}
-          registryUsername:           ${{ env.REGISTRY_USERNAME }}
-          registryPassword:           ${{ env.REGISTRY_PASSWORD }}
 
       - name: Get frontend URL
         id: get_frontend
         run: |
           FRONTEND_FQDN=$(az containerapp show -g "${{ env.AZURE_RESOURCE_GROUP }}" -n "${{ steps.vars.outputs.FRONTEND }}" --query properties.configuration.ingress.fqdn -o tsv)
           echo "FRONTEND_URL=https://${FRONTEND_FQDN}" >> $GITHUB_OUTPUT
-
       - name: Comment preview URL on PR
         uses: actions/github-script@v7
         with:
